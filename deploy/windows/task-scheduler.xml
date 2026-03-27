@@ -2,30 +2,41 @@
 <!--
   Windows Task Scheduler — auto-start vybe-camera-agent on system boot.
 
+  Prerequisites:
+    - Python 3.12+ installed and on PATH
+    - A virtual environment created at: C:\opt\vybe-camera-agent\.venv
+        python -m venv .venv
+        .venv\Scripts\activate
+        pip install -r requirements.txt
+    - config.yaml and .env present in C:\opt\vybe-camera-agent
+
   Installation:
     1. Open Task Scheduler (taskschd.msc) as Administrator
     2. Action → Import Task → select this file
-    3. Adjust the WorkingDirectory and docker path if needed
+    3. Update WorkingDirectory below if you installed to a different path
     4. Save and enable the task
 
   Alternatively, import via command line (run as Administrator):
     schtasks /create /xml task-scheduler.xml /tn "Vybe Camera Agent"
+
+  View logs:
+    The task logs stdout/stderr to: C:\opt\vybe-camera-agent\agent.log
 -->
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Starts the vybe-camera-agent Docker Compose stack on system boot.</Description>
+    <Description>Starts the vybe-camera-agent Python script on system boot.</Description>
     <URI>\Vybe Camera Agent</URI>
   </RegistrationInfo>
   <Triggers>
     <BootTrigger>
       <Enabled>true</Enabled>
-      <!-- Small delay to allow Docker Desktop to initialise -->
-      <Delay>PT30S</Delay>
+      <!-- Small delay to allow network interfaces to come up -->
+      <Delay>PT15S</Delay>
     </BootTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
-      <!-- Run as SYSTEM or a specific user that has Docker access -->
+      <!-- Run as the user who owns the installation; change SID or use a username -->
       <UserId>S-1-5-18</UserId>
       <RunLevel>HighestAvailable</RunLevel>
     </Principal>
@@ -37,13 +48,14 @@
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <RestartOnFailure>
       <Interval>PT1M</Interval>
-      <Count>10</Count>
+      <Count>999</Count>
     </RestartOnFailure>
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>docker</Command>
-      <Arguments>compose up --build</Arguments>
+      <!-- Runs the venv Python interpreter directly — no activation script needed -->
+      <Command>C:\opt\vybe-camera-agent\.venv\Scripts\python.exe</Command>
+      <Arguments>main.py</Arguments>
       <!-- Update this path to where vybe-camera-agent is installed -->
       <WorkingDirectory>C:\opt\vybe-camera-agent</WorkingDirectory>
     </Exec>
