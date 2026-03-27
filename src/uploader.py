@@ -51,7 +51,7 @@ class Uploader(threading.Thread):
         attempt = item.get("attempt", 0)
 
         if not os.path.exists(local_path):
-            logger.warning("[%s] chunk no longer exists, skipping: %s", label, local_path)
+            logger.debug("[%s] chunk not found, skipping: %s", label, os.path.basename(local_path))
             return
 
         filename = os.path.basename(local_path)

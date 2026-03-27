@@ -1,0 +1,33 @@
+# vybe-camera-agent configuration
+
+# Duration of each recorded video segment (in seconds)
+chunk_duration_seconds: 30
+
+# Output video height in pixels. Width is scaled automatically to preserve aspect ratio.
+# Set to null (or remove) to keep the original resolution without transcoding.
+# Common values: 720, 1080, 480
+output_height: 720
+
+# Local directory where in-progress and pending-upload chunks are staged
+# In Docker this is typically a named volume; adjust for bare-metal deployments
+temp_dir: /tmp/vybe-camera-agent
+
+# rclone remote name — must match the prefix used in your RCLONE_CONFIG_* env vars
+# e.g. if your vars are RCLONE_CONFIG_S3VYBE_TYPE=s3, set this to: s3vybe
+rclone_remote: s3vybe
+
+# Path on the remote where chunks will be uploaded (bucket + optional prefix)
+# Files will land at: <rclone_remote>:<s3_bucket_path>/<camera_label>/<filename>.mp4
+s3_bucket_path: vybe-camera-storage-594646164020-eu-central-1-an/softbinator
+
+# List of cameras to capture
+cameras:
+  - label: entrance        # Used as a subfolder name in S3 and in local temp_dir
+    rtsp_url: rtsp://admin:Vybe_c@m1@192.168.66.180:554/h264Preview_01_main
+
+  - label: parking
+    rtsp_url: rtsp://admin:Vybe_c@m1@192.168.66.180:554/h264Preview_01_main
+
+  # Add more cameras as needed:
+  # - label: backyard
+  #   rtsp_url: rtsp://admin:password@192.168.1.12:554/stream1
