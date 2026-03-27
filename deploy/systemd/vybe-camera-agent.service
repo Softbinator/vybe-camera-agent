@@ -1,0 +1,31 @@
+# systemd service unit for vybe-camera-agent (Docker Compose deployment)
+#
+# Installation:
+#   sudo cp vybe-camera-agent.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable vybe-camera-agent
+#   sudo systemctl start vybe-camera-agent
+#
+# View logs:
+#   sudo journalctl -u vybe-camera-agent -f
+
+[Unit]
+Description=Vybe Camera Agent
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vybe-camera-agent
+ExecStart=/usr/bin/docker compose up --build
+ExecStop=/usr/bin/docker compose down
+Restart=always
+RestartSec=10
+
+# If running without Docker (bare Python), replace the above Exec lines with:
+# ExecStart=/opt/vybe-camera-agent/.venv/bin/python main.py
+# EnvironmentFile=/opt/vybe-camera-agent/.env
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+services:
+  camera-agent:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Mount your camera config (read-only)
+      - ./config.yaml:/app/config.yaml:ro
+      # Persistent volume for in-progress and pending-upload chunks
+      - camera_tmp:/tmp/vybe-camera-agent
+    # Optional: network_mode: host can help with RTSP streams on some setups
+    # network_mode: host
+
+volumes:
+  camera_tmp:

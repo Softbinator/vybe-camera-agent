@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Windows Task Scheduler — auto-start vybe-camera-agent on system boot.
+
+  Installation:
+    1. Open Task Scheduler (taskschd.msc) as Administrator
+    2. Action → Import Task → select this file
+    3. Adjust the WorkingDirectory and docker path if needed
+    4. Save and enable the task
+
+  Alternatively, import via command line (run as Administrator):
+    schtasks /create /xml task-scheduler.xml /tn "Vybe Camera Agent"
+-->
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Starts the vybe-camera-agent Docker Compose stack on system boot.</Description>
+    <URI>\Vybe Camera Agent</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <BootTrigger>
+      <Enabled>true</Enabled>
+      <!-- Small delay to allow Docker Desktop to initialise -->
+      <Delay>PT30S</Delay>
+    </BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <!-- Run as SYSTEM or a specific user that has Docker access -->
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>10</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>docker</Command>
+      <Arguments>compose up --build</Arguments>
+      <!-- Update this path to where vybe-camera-agent is installed -->
+      <WorkingDirectory>C:\opt\vybe-camera-agent</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd plist — auto-start vybe-camera-agent on login/boot.
+
+  Installation (runs at user login — LaunchAgents):
+    cp com.vybe.camera-agent.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.vybe.camera-agent.plist
+
+  Installation (runs at boot as root — LaunchDaemons):
+    sudo cp com.vybe.camera-agent.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/com.vybe.camera-agent.plist
+
+  View logs:
+    tail -f /tmp/vybe-camera-agent.stdout.log
+    tail -f /tmp/vybe-camera-agent.stderr.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.vybe.camera-agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/docker</string>
+    <string>compose</string>
+    <string>up</string>
+    <string>--build</string>
+  </array>
+
+  <!-- Update to where vybe-camera-agent is installed -->
+  <key>WorkingDirectory</key>
+  <string>/opt/vybe-camera-agent</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/vybe-camera-agent.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/vybe-camera-agent.stderr.log</string>
+
+  <!-- Wait 30s after boot to allow Docker to start -->
+  <key>StartInterval</key>
+  <integer>30</integer>
+</dict>
+</plist>
