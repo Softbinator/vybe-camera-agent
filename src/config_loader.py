@@ -1,29 +1,63 @@
 import os
+import re
 import yaml
 from dotenv import load_dotenv
 
 
+_ENV_VAR_RE = re.compile(r'^\$\{(\w+)\}$')
+
+
+def _expand_env(value):
+    """Expand a single ${VAR} placeholder or return value as-is."""
+    if not isinstance(value, str):
+        return value
+    m = _ENV_VAR_RE.match(value.strip())
+    if m:
+        return os.environ.get(m.group(1), "")
+    return value
+
+
+def _expand_config(obj):
+    """Recursively expand all ${VAR} placeholders in a config dict/list."""
+    if isinstance(obj, dict):
+        return {k: _expand_config(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_config(item) for item in obj]
+    return _expand_env(obj)
+
+
 def load_config(config_path: str = "config.yaml") -> dict:
-    """Load .env then config.yaml, validate required fields, and return the config dict."""
+    """Load .env then config.yaml, expand env vars, validate, and return config dict."""
     load_dotenv()
 
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        raw = yaml.safe_load(f)
 
-    if not isinstance(config, dict):
+    if not isinstance(raw, dict):
         raise ValueError("config.yaml must be a YAML mapping at the top level")
 
+    config = _expand_config(raw)
     _validate(config)
     return config
 
 
 def _validate(config: dict) -> None:
-    required_top = ["chunk_duration_seconds", "temp_dir", "rclone_remote", "s3_bucket_path", "cameras"]
+    required_top = [
+        "chunk_duration_seconds",
+        "temp_dir",
+        "venue_id",
+        "api_base_url",
+        "keycloak_url",
+        "keycloak_realm",
+        "keycloak_client_id",
+        "keycloak_client_secret",
+        "cameras",
+    ]
     for key in required_top:
-        if key not in config:
+        if key not in config or config[key] == "":
             raise ValueError(f"Missing required config key: '{key}'")
 
     if not isinstance(config["chunk_duration_seconds"], (int, float)) or config["chunk_duration_seconds"] <= 0:
@@ -38,7 +72,7 @@ def _validate(config: dict) -> None:
         if not isinstance(cam, dict):
             raise ValueError(f"Camera entry {i} must be a mapping")
         for field in ("label", "rtsp_url"):
-            if field not in cam:
+            if field not in cam or cam[field] == "":
                 raise ValueError(f"Camera entry {i} is missing required field '{field}'")
         label = cam["label"]
         if label in seen_labels:

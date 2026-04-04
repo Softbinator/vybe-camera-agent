@@ -12,21 +12,22 @@ output_height: 720
 # In Docker this is typically a named volume; adjust for bare-metal deployments
 temp_dir: /tmp/vybe-camera-agent
 
-# rclone remote name — must match the prefix used in your RCLONE_CONFIG_* env vars
-# e.g. if your vars are RCLONE_CONFIG_S3VYBE_TYPE=s3, set this to: s3vybe
-rclone_remote: s3vybe
+# Venue ID (UUID) — all cameras in this agent belong to this venue
+venue_id: "${VENUE_ID}"
 
-# Path on the remote where chunks will be uploaded (bucket + optional prefix)
-# Files will land at: <rclone_remote>:<s3_bucket_path>/<camera_label>/<filename>.mp4
-s3_bucket_path: vybe-camera-storage-594646164020-eu-central-1-an/softbinator
+# vybe-backend API base URL
+api_base_url: "${API_BASE_URL}"
+
+# Keycloak client credentials for service-to-service auth
+keycloak_url: "${KEYCLOAK_URL}"
+keycloak_realm: "${KEYCLOAK_REALM}"
+keycloak_client_id: "${KEYCLOAK_CLIENT_ID}"
+keycloak_client_secret: "${KEYCLOAK_CLIENT_SECRET}"
 
 # List of cameras to capture
 cameras:
-  - label: entrance        # Used as a subfolder name in S3 and in local temp_dir
-    rtsp_url: rtsp://admin:Vybe_c@m1@192.168.66.180:554/h264Preview_01_main
-
-  - label: parking
-    rtsp_url: rtsp://admin:Vybe_c@m1@192.168.66.180:554/h264Preview_01_main
+  - label: entrance        # Used as the cameraName field sent to the API
+    rtsp_url: "${CAMERA_ENTRANCE_RTSP_URL}"
 
   # Add more cameras as needed:
   # - label: backyard

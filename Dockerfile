@@ -1,14 +1,9 @@
 FROM python:3.12-slim
 
-# Install ffmpeg and curl (needed for rclone install)
+# Install ffmpeg only (rclone is no longer used; uploads go via the backend API)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
-    curl \
-    unzip \
     && rm -rf /var/lib/apt/lists/*
-
-# Install rclone
-RUN curl https://rclone.org/install.sh | bash
 
 WORKDIR /app
 
