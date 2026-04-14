@@ -1,34 +1,12 @@
-# vybe-camera-agent configuration
-
-# Duration of each recorded video segment (in seconds)
 chunk_duration_seconds: 30
-
-# Output video height in pixels. Width is scaled automatically to preserve aspect ratio.
-# Set to null (or remove) to keep the original resolution without transcoding.
-# Common values: 720, 1080, 480
-output_height: 720
-
-# Local directory where in-progress and pending-upload chunks are staged
-# In Docker this is typically a named volume; adjust for bare-metal deployments
+output_height: null
 temp_dir: /tmp/vybe-camera-agent
-
-# Venue ID (UUID) — all cameras in this agent belong to this venue
-venue_id: "${VENUE_ID}"
-
-# vybe-backend API base URL
-api_base_url: "${API_BASE_URL}"
-
-# Keycloak client credentials for service-to-service auth
-keycloak_url: "${KEYCLOAK_URL}"
-keycloak_realm: "${KEYCLOAK_REALM}"
-keycloak_client_id: "${KEYCLOAK_CLIENT_ID}"
-keycloak_client_secret: "${KEYCLOAK_CLIENT_SECRET}"
-
-# List of cameras to capture
-cameras:
-  - label: entrance        # Used as the cameraName field sent to the API
-    rtsp_url: "${CAMERA_ENTRANCE_RTSP_URL}"
-
-  # Add more cameras as needed:
-  # - label: backyard
-  #   rtsp_url: rtsp://admin:password@192.168.1.12:554/stream1
+web_port: 5174
+storage_mode: upload
+output_dir: ${OUTPUT_DIR}
+venue_id: 3ae77742-2346-4368-b28d-e08d320e6afb
+api_base_url: http://localhost:8081
+keycloak_url: http://localhost:8080
+keycloak_realm: vybe
+keycloak_client_id: camera-agent-3ae77742-2346-4368-b28d-e08d320e6afb-1775742438165
+keycloak_client_secret: aVCDWSGb21hluZQPOJDHeNQFCWqRpRk2

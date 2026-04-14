@@ -3,12 +3,30 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      OUTPUT_DIR: /output   # override the ./output default from .env to use the bind-mount path
+    ports:
+      - "5174:5174"   # web dashboard
     volumes:
-      # Mount your camera config (read-only)
-      - ./config.yaml:/app/config.yaml:ro
-      # Persistent volume for in-progress chunks waiting to be uploaded
+      # Camera config — writable so the web UI can hot-reload it
+      - ./config.yaml:/app/config.yaml
+      # In-progress chunks (named volume, ephemeral)
       - camera_tmp:/tmp/vybe-camera-agent
-    # Optional: uncomment if RTSP streams require host networking
+      # Locally stored chunks — bind-mounted so files are accessible on the host under ./output/
+      - ./output:/output
+
+    # USB / V4L2 cameras: pass devices through to the container (Linux only).
+    # Add one line per device. Run `ls /dev/video*` on the host to find them.
+    devices:
+      - /dev/video4:/dev/video4
+    # Needed on some systems for V4L2 device access (grants full host device access).
+    # Remove if not required — devices: alone is sufficient on most setups.
+    privileged: true
+
+    # On Linux: uncomment to share the host's network stack so RTSP cameras
+    # on your LAN are reachable exactly as they are from the host machine.
+    # When enabled, the ports: mapping above is ignored (not needed).
+    # See docker-compose.host-network.yml for an override-file alternative.
     # network_mode: host
 
 volumes:

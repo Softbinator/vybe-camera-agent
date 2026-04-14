@@ -1,0 +1,58 @@
+# MediaMTX configuration for the vybe-camera-agent mock RTSP server.
+#
+# Each path entry under "paths:" defines one RTSP stream name.
+# The runOnInit command launches ffmpeg to loop a video file from /mock_videos
+# and re-publish it as a live RTSP stream that camera-agent can consume.
+#
+# Add one entry per camera you want to mock. The stream name (e.g. "camera1")
+# must match what you put in config.yaml as the camera's rtsp_url:
+#
+#   rtsp://mediamtx:8554/camera1
+#
+# The corresponding file in mock_videos/ must be named camera1.mp4.
+
+# Global settings
+rtspAddress: :8554
+hlsAddress: :8888
+webrtcAddress: :8889
+
+# Log only warnings to keep compose output readable
+logLevel: warn
+
+paths:
+  # Stream name: camera1 → file: /mock_videos/camera1.mp4
+  camera1:
+    runOnInit: >-
+      ffmpeg
+      -re
+      -stream_loop -1
+      -i /mock_videos/camera1.mp4
+      -c copy
+      -f rtsp
+      rtsp://localhost:8554/$MTX_PATH
+    runOnInitRestart: yes
+
+  # Stream name: camera2 → file: /mock_videos/camera2.mp4
+  camera2:
+    runOnInit: >-
+      ffmpeg
+      -re
+      -stream_loop -1
+      -i /mock_videos/camera2.mp4
+      -c copy
+      -f rtsp
+      rtsp://localhost:8554/$MTX_PATH
+    runOnInitRestart: yes
+
+  # Add more entries following the same pattern as your camera labels.
+  # stream name: entrance → file: /mock_videos/entrance.mp4
+  entrance:
+    runOnInit: >-
+      ffmpeg
+      -re
+      -stream_loop -1
+      -i /mock_videos/entrance.mp4
+      -c copy
+      -f rtsp
+      rtsp://localhost:8554/$MTX_PATH
+    runOnInitRestart: yes

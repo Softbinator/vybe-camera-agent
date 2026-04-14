@@ -4,9 +4,10 @@ import signal
 import sys
 import threading
 
-from src.camera_worker import CameraWorker
+from src.agent_state import AgentState
 from src.config_loader import load_config
 from src.uploader import Uploader
+from src.web_server import WebServer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,30 +30,30 @@ def main() -> None:
     stop_event = threading.Event()
 
     def shutdown(_signum, _frame):
-        logger.info("Shutdown signal received, stopping workers...")
+        logger.info("Shutdown signal received, stopping workers…")
         stop_event.set()
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    uploader = Uploader(config, upload_queue, stop_event)
+    # AgentState is created first so the Uploader can read live config from it
+    state = AgentState(upload_queue, stop_event)
+    state.start_all(config)
+
+    uploader = Uploader(state, upload_queue, stop_event)
     uploader.start()
 
-    workers = []
-    for camera in config["cameras"]:
-        worker = CameraWorker(camera, config, upload_queue, stop_event)
-        worker.start()
-        workers.append(worker)
-        logger.info("Started worker for camera: %s", camera["label"])
+    web_port = int(config.get("web_port", 5174))
+    server = WebServer(state, config_path=config_path, port=web_port)
+    server.start()
+    logger.info("Web dashboard available at http://localhost:%d", web_port)
 
-    # Block main thread until stop is signalled
     stop_event.wait()
 
-    logger.info("Waiting for camera workers to finish...")
-    for worker in workers:
-        worker.join(timeout=30)
+    logger.info("Stopping all camera workers…")
+    state.stop_all()
 
-    logger.info("Waiting for upload queue to drain...")
+    logger.info("Waiting for upload queue to drain…")
     upload_queue.join()
 
     uploader.join(timeout=60)

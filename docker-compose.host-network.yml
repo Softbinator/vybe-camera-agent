@@ -1,0 +1,15 @@
+# Override file: enables host networking so the camera-agent container can reach
+# RTSP cameras on the same LAN as the Docker host without NAT.
+#
+# Linux only — on macOS/Windows Docker runs inside a VM, so host mode has no effect.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.host-network.yml up
+#
+# The web dashboard will be available on http://<host-ip>:8080 as usual (port is
+# bound directly to the host NIC; the ports: mapping in docker-compose.yml is ignored).
+
+services:
+  camera-agent:
+    network_mode: host
+    ports: []

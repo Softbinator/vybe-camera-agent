@@ -44,6 +44,16 @@ def load_config(config_path: str = "config.yaml") -> dict:
     return config
 
 
+def save_config(config_path: str, raw_yaml: str) -> None:
+    """Write raw YAML text to config_path.
+
+    Uses direct write (no atomic rename) so it works with Docker bind-mounted files,
+    where os.replace() would fail with EBUSY due to cross-device filesystem boundaries.
+    """
+    with open(config_path, "w") as f:
+        f.write(raw_yaml)
+
+
 def _validate(config: dict) -> None:
     required_top = [
         "chunk_duration_seconds",
@@ -54,7 +64,6 @@ def _validate(config: dict) -> None:
         "keycloak_realm",
         "keycloak_client_id",
         "keycloak_client_secret",
-        "cameras",
     ]
     for key in required_top:
         if key not in config or config[key] == "":
@@ -63,18 +72,40 @@ def _validate(config: dict) -> None:
     if not isinstance(config["chunk_duration_seconds"], (int, float)) or config["chunk_duration_seconds"] <= 0:
         raise ValueError("'chunk_duration_seconds' must be a positive number")
 
+    config.setdefault("cameras", [])
+    config.setdefault("storage_mode", "upload")
+    config.setdefault("output_dir", "/output")
+
     cameras = config["cameras"]
-    if not isinstance(cameras, list) or len(cameras) == 0:
-        raise ValueError("'cameras' must be a non-empty list")
+    if not isinstance(cameras, list):
+        raise ValueError("'cameras' must be a list")
+
+    storage_mode = config["storage_mode"]
+    if storage_mode not in ("upload", "local", "both"):
+        raise ValueError(f"'storage_mode' must be 'upload', 'local', or 'both', got '{storage_mode}'")
 
     seen_labels = set()
     for i, cam in enumerate(cameras):
         if not isinstance(cam, dict):
             raise ValueError(f"Camera entry {i} must be a mapping")
-        for field in ("label", "rtsp_url"):
-            if field not in cam or cam[field] == "":
-                raise ValueError(f"Camera entry {i} is missing required field '{field}'")
+        if "label" not in cam or cam["label"] == "":
+            raise ValueError(f"Camera entry {i} is missing required field 'label'")
+
         label = cam["label"]
         if label in seen_labels:
             raise ValueError(f"Duplicate camera label: '{label}'")
         seen_labels.add(label)
+
+        source = cam.get("source", "rtsp")
+        if source not in ("rtsp", "file", "v4l2"):
+            raise ValueError(f"Camera '{label}': source must be 'rtsp', 'v4l2', or 'file', got '{source}'")
+
+        if source == "rtsp":
+            if "rtsp_url" not in cam or cam["rtsp_url"] == "":
+                raise ValueError(f"Camera '{label}' (source=rtsp) is missing required field 'rtsp_url'")
+        elif source == "v4l2":
+            if "device" not in cam or cam["device"] == "":
+                raise ValueError(f"Camera '{label}' (source=v4l2) is missing required field 'device'")
+        elif source == "file":
+            if "replay_dir" not in cam or cam["replay_dir"] == "":
+                raise ValueError(f"Camera '{label}' (source=file) is missing required field 'replay_dir'")

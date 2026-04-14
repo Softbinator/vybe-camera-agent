@@ -1,0 +1,32 @@
+# Override file: adds a MediaMTX sidecar that re-streams files from mock_videos/
+# as live RTSP streams so you can test the full ffmpeg capture pipeline without
+# a physical camera.
+#
+# Usage:
+#   1. Drop one or more .mp4 files into mock_videos/
+#   2. Edit config.yaml so each camera's rtsp_url points to one of:
+#        rtsp://mediamtx:8554/camera1   (loops mock_videos/camera1.mp4)
+#        rtsp://mediamtx:8554/camera2   (loops mock_videos/camera2.mp4)
+#      Any filename works — just match the stream name to the filename stem.
+#   3. Run:
+#        docker compose -f docker-compose.yml -f docker-compose.mock.yml up
+#
+# The RTSP port (8554) is also exposed on the host so you can point VLC or
+# ffplay at rtsp://localhost:8554/camera1 to verify the mock stream yourself.
+
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+      - ./mock_videos:/mock_videos:ro
+    ports:
+      - "8554:8554"   # RTSP
+      - "8888:8888"   # HLS (optional browser preview)
+
+  camera-agent:
+    depends_on:
+      - mediamtx
+    # Allow the agent to refer to the mediamtx container by hostname
+    # (default bridge network handles this automatically within compose)
