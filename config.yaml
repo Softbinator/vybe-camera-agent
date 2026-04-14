@@ -4,9 +4,9 @@ temp_dir: /tmp/vybe-camera-agent
 web_port: 5174
 storage_mode: upload
 output_dir: ${OUTPUT_DIR}
-venue_id: 3ae77742-2346-4368-b28d-e08d320e6afb
+venue_id: 48c2fcac-b0e6-47e6-935a-762b9925e411
 api_base_url: http://localhost:8081
 keycloak_url: http://localhost:8080
 keycloak_realm: vybe
-keycloak_client_id: camera-agent-3ae77742-2346-4368-b28d-e08d320e6afb-1775742438165
-keycloak_client_secret: aVCDWSGb21hluZQPOJDHeNQFCWqRpRk2
+keycloak_client_id: camera-agent-48c2fcac-b0e6-47e6-935a-762b9925e411-1776202128396
+keycloak_client_secret: BEiN5lRzNLvIXtEUGYn9KALGWsqqvNMG

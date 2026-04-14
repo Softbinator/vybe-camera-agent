@@ -227,9 +227,10 @@ _DASHBOARD_HTML = """\
          ondragover="event.preventDefault();this.classList.add('drag')"
          ondragleave="this.classList.remove('drag')"
          ondrop="handleDrop(event)">
-      Drop an .mp4 file here or click to browse
+      Drop up to 20 .mp4 files here or click to browse (sorted by filename)
     </div>
-    <input type="file" id="inject-input" accept=".mp4,video/mp4" onchange="handleFileSelect(this.files)">
+    <div id="inject-progress" style="display:none;margin-top:10px;font-size:.85rem;color:var(--muted)"></div>
+    <input type="file" id="inject-input" accept=".mp4,video/mp4" multiple onchange="handleFileSelect(this.files)">
   </div>
 
   <div class="toast" id="toast"></div>
@@ -446,33 +447,62 @@ async function restartCamera(label) {
 // ---------------------------------------------------------------------------
 // Manual chunk injection
 // ---------------------------------------------------------------------------
+const MAX_INJECT_FILES = 2000;
+
 async function injectFile(label, file) {
   const fd = new FormData();
   fd.append('label', label);
   fd.append('file', file);
-  try {
-    const r = await fetch(API + `/api/inject?label=${encodeURIComponent(label)}`, {method:'POST', body: fd});
-    const data = await r.json();
-    if (r.ok) showToast(`Injected ${file.name} → ${label}`);
-    else showToast('Error: ' + (data.detail || 'unknown'), true);
-  } catch(e) { showToast('Error: ' + e.message, true); }
+  const r = await fetch(API + `/api/inject?label=${encodeURIComponent(label)}`, {method:'POST', body: fd});
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.detail || 'unknown error');
+  return data;
 }
 
-function handleFileSelect(files) {
+async function handleFileSelect(files) {
   if (!files.length) return;
   const label = document.getElementById('inject-label').value.trim();
   if (!label) { showToast('Enter a camera label first', true); return; }
-  injectFile(label, files[0]);
+
+  const fileArr = Array.from(files);
+  if (fileArr.length > MAX_INJECT_FILES) {
+    showToast(`Select at most ${MAX_INJECT_FILES} files at a time`, true);
+    return;
+  }
+
+  // Sort lexicographically — chronological for YYYYMMDD_HHMMSS.mp4 filenames
+  fileArr.sort((a, b) => a.name.localeCompare(b.name));
+
+  const zone = document.getElementById('inject-zone');
+  const progress = document.getElementById('inject-progress');
+  const labelInput = document.getElementById('inject-label');
+  zone.style.pointerEvents = 'none';
+  zone.style.opacity = '0.5';
+  labelInput.disabled = true;
+  progress.style.display = 'block';
+
+  try {
+    for (let i = 0; i < fileArr.length; i++) {
+      const file = fileArr[i];
+      progress.textContent = `Uploading ${i + 1} / ${fileArr.length} — ${file.name}`;
+      await injectFile(label, file);
+    }
+    showToast(`Injected ${fileArr.length} file(s) → ${label}`);
+  } catch(e) {
+    showToast('Upload failed: ' + e.message, true);
+  } finally {
+    zone.style.pointerEvents = '';
+    zone.style.opacity = '';
+    labelInput.disabled = false;
+    progress.style.display = 'none';
+    document.getElementById('inject-input').value = '';
+  }
 }
 
 function handleDrop(e) {
   e.preventDefault();
   document.getElementById('inject-zone').classList.remove('drag');
-  const files = e.dataTransfer.files;
-  if (!files.length) return;
-  const label = document.getElementById('inject-label').value.trim();
-  if (!label) { showToast('Enter a camera label first', true); return; }
-  injectFile(label, files[0]);
+  handleFileSelect(e.dataTransfer.files);
 }
 
 // ---------------------------------------------------------------------------
