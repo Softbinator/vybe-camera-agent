@@ -6,6 +6,7 @@ import threading
 
 from src.agent_state import AgentState
 from src.config_loader import load_config
+from src.lan_discovery import LanDiscovery
 from src.uploader import Uploader
 from src.web_server import WebServer
 
@@ -47,6 +48,12 @@ def main() -> None:
     server = WebServer(state, config_path=config_path, port=web_port)
     server.start()
     logger.info("Web dashboard available at http://localhost:%d", web_port)
+
+    lan_discovery = None
+    if config.get("lan_discovery", {}).get("enabled"):
+        lan_discovery = LanDiscovery(config_path, state, stop_event)
+        lan_discovery.start()
+        logger.info("LAN discovery enabled — watching dnsmasq leases")
 
     stop_event.wait()
 

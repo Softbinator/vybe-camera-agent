@@ -14,13 +14,14 @@ services:
       - camera_tmp:/tmp/vybe-camera-agent
       # Locally stored chunks — bind-mounted so files are accessible on the host under ./output/
       - ./output:/output
+      # All host video devices (Linux only). Pick the right /dev/videoN from the
+      # dashboard's "Scan USB" button — hot-plugged devices appear on the next
+      # rescan without restarting the container. Paired with `privileged: true`
+      # below to bypass Docker's default cgroup device filter.
+      - /dev:/dev
 
-    # USB / V4L2 cameras: pass devices through to the container (Linux only).
-    # Add one line per device. Run `ls /dev/video*` on the host to find them.
-    devices:
-      - /dev/video4:/dev/video4
-    # Needed on some systems for V4L2 device access (grants full host device access).
-    # Remove if not required — devices: alone is sufficient on most setups.
+    # Grants full host device access — required for dynamic /dev/video* via the
+    # bind mount above. See docker-compose.site.yml for a similar setup on-site.
     privileged: true
 
     # On Linux: uncomment to share the host's network stack so RTSP cameras

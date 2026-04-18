@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING
 import uvicorn
 import yaml
 from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+
+from src.preview import capture_snapshot
+from src.usb_scanner import scan_usb_devices
 
 if TYPE_CHECKING:
     from src.agent_state import AgentState
@@ -84,7 +87,7 @@ _DASHBOARD_HTML = """\
     .queue-bar { background: var(--surface); border: 1px solid var(--border);
                  border-radius: var(--radius); padding: 14px 18px;
                  display: flex; align-items: center; justify-content: space-between;
-                 margin-bottom: 24px; }
+                 margin-bottom: 24px; gap: 16px; flex-wrap: wrap; }
     .queue-bar .label { font-size: .85rem; color: var(--muted); }
     .queue-bar .value { font-size: 1.5rem; font-weight: 700; }
     .section-title { display: block; font-size: .8rem; font-weight: 600;
@@ -122,6 +125,17 @@ _DASHBOARD_HTML = """\
     .mode-toggle button:hover { background: var(--border); color: var(--text); }
     .mode-toggle button.active { background: var(--accent); color: #fff; }
     .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    /* Preview modal */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.8);
+                display: none; align-items: center; justify-content: center; z-index: 500; }
+    .modal-bg.show { display: flex; }
+    .modal { background: var(--surface); border: 1px solid var(--border);
+             border-radius: var(--radius); padding: 18px; max-width: 90vw; max-height: 90vh;
+             display: flex; flex-direction: column; gap: 12px; }
+    .modal header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .modal img { max-width: 80vw; max-height: 70vh; border-radius: 6px;
+                 background: #000; object-fit: contain; }
+    .modal .err { color: var(--red); font-size: .85rem; }
     .toast { position: fixed; bottom: 24px; right: 24px; background: #1e293b;
              border: 1px solid var(--border); border-radius: 8px; padding: 12px 18px;
              font-size: .85rem; max-width: 340px; opacity: 0;
@@ -137,6 +151,10 @@ _DASHBOARD_HTML = """\
   <div class="queue-bar">
     <span class="label">Upload queue depth</span>
     <span class="value" id="queue-depth">—</span>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="btn-toggle-recording" class="btn-primary" onclick="toggleRecording()">Loading…</button>
+      <button id="btn-purge-queue" class="btn-danger" onclick="purgeQueue()" title="Drop every chunk pending upload — use when the uploader is stuck">Purge queue</button>
+    </div>
   </div>
 
   <!-- Storage mode toggle -->
@@ -150,6 +168,24 @@ _DASHBOARD_HTML = """\
       <button id="mode-both"   onclick="setStorageMode('both')">Upload + Save</button>
       <button id="mode-local"  onclick="setStorageMode('local')">Save locally</button>
     </div>
+  </div>
+
+  <!-- Discovered cameras awaiting credentials -->
+  <span class="section-title">Discovered Cameras (Awaiting Credentials)</span>
+  <div class="grid" id="discovered-grid">
+    <div class="card"><p style="color:var(--muted)">No pending cameras.</p></div>
+  </div>
+
+  <!-- Add USB camera -->
+  <div class="card" style="margin-bottom:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div>
+        <div style="font-size:.95rem;font-weight:600">Add USB Camera</div>
+        <div style="font-size:.78rem;color:var(--muted)">Enumerate /dev/video* and register one in a click.</div>
+      </div>
+      <button class="btn-primary" onclick="scanUsb()">Scan USB</button>
+    </div>
+    <div id="usb-scan-results" style="margin-top:12px"></div>
   </div>
 
   <!-- Camera status cards -->
@@ -233,6 +269,19 @@ _DASHBOARD_HTML = """\
     <input type="file" id="inject-input" accept=".mp4,video/mp4" multiple onchange="handleFileSelect(this.files)">
   </div>
 
+  <!-- Preview modal -->
+  <div class="modal-bg" id="preview-modal" onclick="closePreview(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <header>
+        <div style="font-weight:600" id="preview-title">Preview</div>
+        <button class="btn-neutral" onclick="closePreview()">Close</button>
+      </header>
+      <img id="preview-img" alt="camera preview">
+      <div class="err" id="preview-err" style="display:none"></div>
+      <div style="font-size:.75rem;color:var(--muted)">Snapshot refreshes every 2 s. Not recorded or uploaded.</div>
+    </div>
+  </div>
+
   <div class="toast" id="toast"></div>
 
 <script>
@@ -261,6 +310,8 @@ function badgeClass(state) {
   if (s === 'connected') return 'badge-green';
   if (s === 'reconnecting' || s === 'connecting') return 'badge-yellow';
   if (s === 'waiting') return 'badge-blue';
+  if (s === 'awaiting_credentials') return 'badge-blue';
+  if (s === 'paused') return 'badge-yellow';
   if (s === 'stopped') return 'badge-gray';
   return 'badge-red';
 }
@@ -296,7 +347,10 @@ function renderCamera(cam) {
         ${urlLine}
       </div>
       ${errorHtml}
-      <button class="btn-danger" onclick="restartCamera('${escHtml(cam.label)}')">Restart</button>
+      <div class="row">
+        <button class="btn-primary" onclick="openPreview('${escHtml(cam.label)}')">Preview</button>
+        <button class="btn-danger"  onclick="restartCamera('${escHtml(cam.label)}')">Restart</button>
+      </div>
     </div>`;
 }
 
@@ -320,9 +374,19 @@ async function fetchStatus() {
         : `Chunks saved to ${outputDir}/<label>/` + (mode === 'both' ? ' (also uploaded)' : '');
     }
 
+    // Reflect paused flag on the toggle button.
+    const recBtn = document.getElementById('btn-toggle-recording');
+    if (recBtn) {
+      const paused = !!data.recording_paused;
+      recBtn.textContent = paused ? 'Resume recording' : 'Pause recording';
+      recBtn.className = paused ? 'btn-primary' : 'btn-neutral';
+      recBtn.dataset.paused = paused ? '1' : '0';
+    }
+
     const grid = document.getElementById('cameras-grid');
-    if (data.cameras && data.cameras.length) {
-      grid.innerHTML = data.cameras.map(renderCamera).join('');
+    const activeCams = (data.cameras || []).filter(c => !c.pending_credentials);
+    if (activeCams.length) {
+      grid.innerHTML = activeCams.map(renderCamera).join('');
     } else {
       grid.innerHTML = `<div class="card"><p style="color:var(--muted)">
         No cameras configured — use the Connection Settings to add cameras via config.yaml,
@@ -519,12 +583,205 @@ function showToast(msg, isError = false) {
 }
 
 // ---------------------------------------------------------------------------
+// Discovered cameras (pending credentials)
+// ---------------------------------------------------------------------------
+function renderDiscovered(cam) {
+  const label = escHtml(cam.label);
+  return `
+    <div class="card">
+      <div class="card-title">${label} <span class="badge badge-blue">awaiting credentials</span></div>
+      <div class="meta">
+        <span>RTSP URL</span><strong style="word-break:break-all">${escHtml(cam.rtsp_url || '')}</strong>
+      </div>
+      <div class="conn-grid" style="margin-bottom:10px">
+        <div class="field"><label>Username</label><input id="cred-user-${label}" type="text" placeholder="admin"></div>
+        <div class="field"><label>Password</label><input id="cred-pass-${label}" type="password" placeholder="••••••••"></div>
+      </div>
+      <div class="row">
+        <button class="btn-primary" onclick="saveCredentials('${label}')">Save &amp; Start</button>
+        <button class="btn-danger"  onclick="deleteCamera('${label}')">Delete</button>
+      </div>
+    </div>`;
+}
+async function fetchDiscovered() {
+  try {
+    const r = await fetch(API + '/api/discovered');
+    if (!r.ok) return;
+    const data = await r.json();
+    const grid = document.getElementById('discovered-grid');
+    if (data.cameras && data.cameras.length) {
+      grid.innerHTML = data.cameras.map(renderDiscovered).join('');
+    } else {
+      grid.innerHTML = `<div class="card"><p style="color:var(--muted)">No pending cameras.</p></div>`;
+    }
+  } catch(e) { /* ignore */ }
+}
+async function saveCredentials(label) {
+  const username = document.getElementById('cred-user-' + label)?.value.trim() || '';
+  const password = document.getElementById('cred-pass-' + label)?.value || '';
+  if (!username || !password) { showToast('Username and password required', true); return; }
+  try {
+    const r = await fetch(API + `/api/cameras/${encodeURIComponent(label)}/credentials`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username, password}),
+    });
+    const data = await r.json();
+    if (r.ok) { showToast(`Credentials saved for ${label}`); fetchDiscovered(); fetchStatus(); }
+    else     { showToast('Error: ' + (data.detail || 'unknown'), true); }
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+async function deleteCamera(label) {
+  if (!confirm(`Delete camera "${label}"?`)) return;
+  try {
+    const r = await fetch(API + `/api/cameras/${encodeURIComponent(label)}`, {method:'DELETE'});
+    const data = await r.json();
+    if (r.ok) { showToast(`Deleted ${label}`); fetchDiscovered(); fetchStatus(); loadConfig(); }
+    else     { showToast('Error: ' + (data.detail || 'unknown'), true); }
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// USB scan
+// ---------------------------------------------------------------------------
+async function scanUsb() {
+  const out = document.getElementById('usb-scan-results');
+  out.innerHTML = `<p style="color:var(--muted);font-size:.82rem">Scanning…</p>`;
+  try {
+    const r = await fetch(API + '/api/usb-scan');
+    const data = await r.json();
+    if (!r.ok) { out.innerHTML = `<p style="color:var(--red)">${escHtml(data.detail || 'scan failed')}</p>`; return; }
+    const devs = data.devices || [];
+    if (!devs.length) { out.innerHTML = `<p style="color:var(--muted);font-size:.82rem">No video devices found.</p>`; return; }
+    out.innerHTML = devs.map(d => {
+      const fmts = (d.formats || []).map(f => `${escHtml(f.pixel_format)} (${(f.sizes||[]).slice(0,4).map(escHtml).join(', ')})`).join(' · ');
+      const devEsc = escHtml(d.device);
+      const defaultLabel = 'usb-' + (d.device || '').replace(/[^a-zA-Z0-9]/g, '-').replace(/^-+/, '');
+      return `
+        <div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="font-weight:600;font-size:.85rem">${escHtml(d.name)} <span style="color:var(--muted);font-weight:400">${devEsc}</span></div>
+          <div style="font-size:.75rem;color:var(--muted);margin-top:4px">${fmts || 'no formats reported'}</div>
+          <div class="conn-grid" style="grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px">
+            <div class="field"><label>Label</label><input id="usb-label-${devEsc}" type="text" value="${escHtml(defaultLabel)}"></div>
+            <div class="field"><label>Framerate</label><input id="usb-fps-${devEsc}" type="number" min="1" max="60" value="30"></div>
+            <div class="field"><label>Size</label><input id="usb-size-${devEsc}" type="text" value="1280x720"></div>
+          </div>
+          <button class="btn-primary" style="margin-top:8px" onclick="addUsbCamera('${devEsc}')">Add</button>
+        </div>`;
+    }).join('');
+  } catch(e) { out.innerHTML = `<p style="color:var(--red)">${escHtml(e.message)}</p>`; }
+}
+
+async function addUsbCamera(device) {
+  const label = document.getElementById('usb-label-' + device)?.value.trim();
+  const fps = Number(document.getElementById('usb-fps-' + device)?.value) || 30;
+  const size = document.getElementById('usb-size-' + device)?.value.trim() || '1280x720';
+  if (!label) { showToast('Label is required', true); return; }
+  try {
+    const r = await fetch(API + '/api/cameras', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        label, source: 'v4l2', device, framerate: fps, video_size: size,
+      }),
+    });
+    const data = await r.json();
+    if (r.ok) { showToast(`Added ${label}`); fetchStatus(); loadConfig(); }
+    else     { showToast('Error: ' + (data.detail || 'unknown'), true); }
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Recording pause/resume + queue purge
+// ---------------------------------------------------------------------------
+async function toggleRecording() {
+  const btn = document.getElementById('btn-toggle-recording');
+  const paused = btn && btn.dataset.paused === '1';
+  const endpoint = paused ? '/api/recording/resume' : '/api/recording/pause';
+  try {
+    const r = await fetch(API + endpoint, {method: 'POST'});
+    const data = await r.json();
+    if (r.ok) {
+      showToast(paused ? 'Recording resumed' : 'Recording paused');
+      fetchStatus();
+    } else {
+      showToast('Error: ' + (data.detail || 'unknown'), true);
+    }
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+async function purgeQueue() {
+  if (!confirm('Drop every chunk currently pending upload? Use this when the uploader is stuck on a failed upload.')) return;
+  try {
+    const r = await fetch(API + '/api/queue/purge', {method: 'POST'});
+    const data = await r.json();
+    if (r.ok) { showToast(`Queue purged — dropped ${data.dropped} chunk(s)`); fetchStatus(); }
+    else     { showToast('Error: ' + (data.detail || 'unknown'), true); }
+  } catch(e) { showToast('Error: ' + e.message, true); }
+}
+
+// ---------------------------------------------------------------------------
+// Preview modal (camera snapshot)
+// ---------------------------------------------------------------------------
+let previewTimer = null;
+let previewLabel = null;
+
+function openPreview(label) {
+  previewLabel = label;
+  document.getElementById('preview-title').textContent = 'Preview — ' + label;
+  document.getElementById('preview-err').style.display = 'none';
+  document.getElementById('preview-img').style.display = '';
+  document.getElementById('preview-modal').classList.add('show');
+  refreshPreview();
+  previewTimer = setInterval(refreshPreview, 2000);
+}
+
+function refreshPreview() {
+  if (!previewLabel) return;
+  const img = document.getElementById('preview-img');
+  const err = document.getElementById('preview-err');
+  const url = API + `/api/cameras/${encodeURIComponent(previewLabel)}/preview.jpg?ts=${Date.now()}`;
+  // Use fetch so we can show the server's error text on failure.
+  fetch(url).then(async r => {
+    if (!r.ok) {
+      const text = await r.text();
+      img.style.display = 'none';
+      err.style.display = '';
+      try { err.textContent = 'Preview failed: ' + (JSON.parse(text).detail || text); }
+      catch { err.textContent = 'Preview failed: ' + text; }
+      return;
+    }
+    const blob = await r.blob();
+    img.src = URL.createObjectURL(blob);
+    img.style.display = '';
+    err.style.display = 'none';
+  }).catch(e => {
+    img.style.display = 'none';
+    err.style.display = '';
+    err.textContent = 'Preview failed: ' + e.message;
+  });
+}
+
+function closePreview(e) {
+  if (e && e.target !== e.currentTarget) return;
+  previewLabel = null;
+  if (previewTimer) { clearInterval(previewTimer); previewTimer = null; }
+  document.getElementById('preview-modal').classList.remove('show');
+  const img = document.getElementById('preview-img');
+  if (img.src) URL.revokeObjectURL(img.src);
+  img.src = '';
+}
+// ESC to close preview
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePreview(); });
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 loadConfig();
 loadConnection();
 fetchStatus();
+fetchDiscovered();
 setInterval(fetchStatus, 3000);
+setInterval(fetchDiscovered, 5000);
 </script>
 </body>
 </html>
@@ -711,5 +968,204 @@ class WebServer(threading.Thread):
             logger.info("[%s] manually injected chunk: %s (%d bytes)", label, filename, len(contents))
 
             return {"ok": True, "label": label, "file": filename, "bytes": len(contents)}
+
+        # ------------------------------------------------------------------
+        # Auto-discovery & USB-scan endpoints
+        # ------------------------------------------------------------------
+
+        def _patch_cameras(mutate) -> dict:
+            """Read config.yaml, call mutate(cameras: list) -> None, save + reload.
+            Returns the new config. Raises HTTPException on validation failure."""
+            try:
+                with open(config_path) as f:
+                    raw_yaml = f.read()
+                parsed = yaml.safe_load(raw_yaml) or {}
+            except (OSError, yaml.YAMLError) as exc:
+                raise HTTPException(status_code=500, detail=f"Could not read config: {exc}")
+
+            cameras = parsed.get("cameras") or []
+            mutate(cameras)
+            parsed["cameras"] = cameras
+
+            new_yaml = yaml.safe_dump(parsed, sort_keys=False, default_flow_style=False, allow_unicode=True)
+            try:
+                save_config(config_path, new_yaml)
+                new_config = load_config(config_path)
+            except (ValueError, OSError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            state.reload_config(new_config)
+            return new_config
+
+        @app.get("/api/discovered")
+        async def list_discovered():
+            cfg = state.get_config()
+            pending = [
+                {
+                    "label": c.get("label"),
+                    "rtsp_url": c.get("rtsp_url"),
+                    "auto_discovered": bool(c.get("auto_discovered")),
+                }
+                for c in cfg.get("cameras", [])
+                if c.get("pending_credentials")
+            ]
+            return {"cameras": pending}
+
+        @app.post("/api/cameras/{label}/credentials")
+        async def set_camera_credentials(label: str, body: dict):
+            username = (body.get("username") or "").strip()
+            password = body.get("password") or ""
+            if not username:
+                raise HTTPException(status_code=400, detail="username is required")
+            if not password:
+                raise HTTPException(status_code=400, detail="password is required")
+
+            found = {"hit": False}
+
+            def mutate(cameras):
+                for cam in cameras:
+                    if isinstance(cam, dict) and cam.get("label") == label:
+                        cam["rtsp_username"] = username
+                        cam["rtsp_password"] = password
+                        cam["pending_credentials"] = False
+                        found["hit"] = True
+                        return
+            _patch_cameras(mutate)
+
+            if not found["hit"]:
+                raise HTTPException(status_code=404, detail=f"Camera '{label}' not found")
+            return {"ok": True, "label": label}
+
+        @app.get("/api/usb-scan")
+        async def usb_scan():
+            return {"devices": scan_usb_devices()}
+
+        @app.post("/api/cameras")
+        async def add_camera(body: dict):
+            label = (body.get("label") or "").strip()
+            source = body.get("source") or "v4l2"
+            if not label:
+                raise HTTPException(status_code=400, detail="label is required")
+            if source not in ("v4l2", "rtsp", "file"):
+                raise HTTPException(status_code=400, detail="source must be v4l2, rtsp or file")
+
+            new_cam: dict = {"label": label, "source": source}
+            if source == "v4l2":
+                device = (body.get("device") or "").strip()
+                if not device:
+                    raise HTTPException(status_code=400, detail="device is required for v4l2")
+                new_cam["device"] = device
+                for opt in ("framerate", "video_size", "input_format"):
+                    if body.get(opt):
+                        new_cam[opt] = body[opt]
+            elif source == "rtsp":
+                rtsp_url = (body.get("rtsp_url") or "").strip()
+                if not rtsp_url:
+                    raise HTTPException(status_code=400, detail="rtsp_url is required for rtsp")
+                new_cam["rtsp_url"] = rtsp_url
+                if body.get("rtsp_username"):
+                    new_cam["rtsp_username"] = body["rtsp_username"]
+                if body.get("rtsp_password"):
+                    new_cam["rtsp_password"] = body["rtsp_password"]
+            else:  # file
+                replay_dir = (body.get("replay_dir") or "").strip()
+                if not replay_dir:
+                    raise HTTPException(status_code=400, detail="replay_dir is required for file")
+                new_cam["replay_dir"] = replay_dir
+
+            existing = {c.get("label") for c in state.get_config().get("cameras", []) if isinstance(c, dict)}
+            if label in existing:
+                raise HTTPException(status_code=409, detail=f"Camera '{label}' already exists")
+
+            def mutate(cameras):
+                cameras.append(new_cam)
+            _patch_cameras(mutate)
+
+            return {"ok": True, "label": label}
+
+        # ------------------------------------------------------------------
+        # Global recording controls (pause/resume all cameras) + queue purge
+        # ------------------------------------------------------------------
+
+        def _persist_paused_flag(paused: bool) -> None:
+            """Persist `recording_paused` to config.yaml so the state survives a restart."""
+            try:
+                with open(config_path) as f:
+                    parsed = yaml.safe_load(f.read()) or {}
+            except (OSError, yaml.YAMLError):
+                return
+            parsed["recording_paused"] = bool(paused)
+            try:
+                save_config(config_path, yaml.safe_dump(parsed, sort_keys=False,
+                                                        default_flow_style=False,
+                                                        allow_unicode=True))
+            except OSError as exc:
+                logger.warning("could not persist recording_paused: %s", exc)
+
+        @app.get("/api/recording")
+        async def get_recording_state():
+            return {"paused": state.is_paused()}
+
+        @app.post("/api/recording/pause")
+        async def pause_recording():
+            stopped = state.pause_all()
+            _persist_paused_flag(True)
+            return {"ok": True, "paused": True, "workers_stopped": stopped}
+
+        @app.post("/api/recording/resume")
+        async def resume_recording():
+            started = state.resume_all()
+            _persist_paused_flag(False)
+            return {"ok": True, "paused": False, "workers_started": started}
+
+        @app.post("/api/queue/purge")
+        async def purge_queue():
+            dropped = state.purge_upload_queue()
+            return {"ok": True, "dropped": dropped}
+
+        # ------------------------------------------------------------------
+        # Camera preview — on-demand JPEG snapshot
+        # ------------------------------------------------------------------
+
+        @app.get("/api/cameras/{label}/preview.jpg")
+        async def preview_snapshot(label: str):
+            cfg = state.get_config()
+            cam = next((c for c in cfg.get("cameras", [])
+                        if isinstance(c, dict) and c.get("label") == label), None)
+            if cam is None:
+                raise HTTPException(status_code=404, detail=f"Camera '{label}' not found")
+            if cam.get("pending_credentials"):
+                raise HTTPException(status_code=409, detail="Camera is awaiting credentials")
+            try:
+                jpeg = capture_snapshot(cam)
+            except RuntimeError as exc:
+                msg = str(exc)
+                # On V4L2, a running capture worker holds /dev/videoN exclusively —
+                # translate the raw ffmpeg error into an actionable hint.
+                if cam.get("source") == "v4l2" and ("Device or resource busy" in msg or "EBUSY" in msg):
+                    msg = (f"{cam.get('device','/dev/videoN')} is busy — "
+                           f"pause recording to preview this camera.")
+                raise HTTPException(status_code=502, detail=msg)
+            return Response(
+                content=jpeg,
+                media_type="image/jpeg",
+                headers={"Cache-Control": "no-store"},
+            )
+
+        @app.delete("/api/cameras/{label}")
+        async def delete_camera(label: str):
+            found = {"hit": False}
+
+            def mutate(cameras):
+                for i, cam in enumerate(cameras):
+                    if isinstance(cam, dict) and cam.get("label") == label:
+                        cameras.pop(i)
+                        found["hit"] = True
+                        return
+            _patch_cameras(mutate)
+
+            if not found["hit"]:
+                raise HTTPException(status_code=404, detail=f"Camera '{label}' not found")
+            return {"ok": True, "label": label}
 
         return app

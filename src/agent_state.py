@@ -30,6 +30,10 @@ class AgentState:
         self._camera_configs: dict[str, dict] = {}
         self._status: dict[str, dict] = {}
         self._config: dict = {}
+        # Global recording pause flag. When True, start_all / reload_config still
+        # track cameras but don't spawn workers, and pause_all stops any running
+        # workers without discarding their config.
+        self._recording_paused: bool = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -37,8 +41,91 @@ class AgentState:
 
     def start_all(self, config: dict) -> None:
         self._config = config
+        # Respect the persisted pause flag so recording stays off across restarts
+        # if the operator explicitly paused it.
+        self._recording_paused = bool(config.get("recording_paused", False))
+        if self._recording_paused:
+            logger.info("Recording is paused in config — workers will not be started")
+            # Still register status entries so the dashboard shows the cameras.
+            for cam in config.get("cameras", []):
+                self._register_paused_status(cam)
+            return
         for cam in config.get("cameras", []):
             self._start_worker(cam, config)
+
+    def pause_all(self) -> int:
+        """Stop every running worker without touching the configured camera list.
+        Returns the number of workers stopped."""
+        with self._lock:
+            labels = list(self._workers.keys())
+            self._recording_paused = True
+            cam_configs = dict(self._camera_configs)
+        for label in labels:
+            self._stop_worker(label, timeout=10)
+        # Mark status as paused so the UI reflects the reason for 'stopped'.
+        with self._lock:
+            for label, cam in cam_configs.items():
+                st = self._status.get(label)
+                if st is not None:
+                    st["state"] = "paused"
+                    st["pending_credentials"] = bool(cam.get("pending_credentials", False))
+        logger.info("Recording paused — stopped %d worker(s)", len(labels))
+        return len(labels)
+
+    def resume_all(self) -> int:
+        """Restart workers for every configured camera. Returns the number started."""
+        with self._lock:
+            config = dict(self._config)
+            self._recording_paused = False
+        started = 0
+        for cam in config.get("cameras", []):
+            label = cam.get("label")
+            with self._lock:
+                if label in self._workers:
+                    continue
+            self._start_worker(cam, config)
+            if not bool(cam.get("pending_credentials", False)):
+                started += 1
+        logger.info("Recording resumed — started %d worker(s)", started)
+        return started
+
+    def is_paused(self) -> bool:
+        with self._lock:
+            return self._recording_paused
+
+    def purge_upload_queue(self) -> int:
+        """Drop every pending upload. Returns the number of items discarded."""
+        dropped = 0
+        while True:
+            try:
+                self.upload_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.upload_queue.task_done()
+            dropped += 1
+        logger.warning("Upload queue purged — %d chunk(s) dropped", dropped)
+        return dropped
+
+    def _register_paused_status(self, cam_config: dict) -> None:
+        """Insert a dashboard status entry for a camera that is not being started."""
+        label = cam_config["label"]
+        pending = bool(cam_config.get("pending_credentials", False))
+        with self._lock:
+            self._camera_configs[label] = cam_config
+            self._status[label] = {
+                "label": label,
+                "source": cam_config.get("source", "rtsp"),
+                "rtsp_url": cam_config.get("rtsp_url", ""),
+                "device": cam_config.get("device", ""),
+                "replay_dir": cam_config.get("replay_dir", ""),
+                "state": "awaiting_credentials" if pending else "paused",
+                "reconnect_attempts": 0,
+                "last_chunk_at": None,
+                "chunks_enqueued": 0,
+                "last_error": None,
+                "auto_discovered": bool(cam_config.get("auto_discovered", False)),
+                "pending_credentials": pending,
+            }
 
     def stop_all(self) -> None:
         with self._lock:
@@ -100,11 +187,13 @@ class AgentState:
             cameras = [dict(s) for s in self._status.values()]
             storage_mode = self._config.get("storage_mode", "upload")
             output_dir = self._config.get("output_dir", "/output")
+            recording_paused = self._recording_paused
 
         return {
             "queue_depth": self.upload_queue.qsize(),
             "storage_mode": storage_mode,
             "output_dir": output_dir,
+            "recording_paused": recording_paused,
             "cameras": cameras,
         }
 
@@ -137,6 +226,7 @@ class AgentState:
         label = cam_config["label"]
         per_stop = threading.Event()
         source = cam_config.get("source", "rtsp")
+        pending = bool(cam_config.get("pending_credentials", False))
 
         initial_status = {
             "label": label,
@@ -144,17 +234,34 @@ class AgentState:
             "rtsp_url": cam_config.get("rtsp_url", ""),
             "device": cam_config.get("device", ""),
             "replay_dir": cam_config.get("replay_dir", ""),
-            "state": "starting",
+            "state": "awaiting_credentials" if pending else "starting",
             "reconnect_attempts": 0,
             "last_chunk_at": None,
             "chunks_enqueued": 0,
             "last_error": None,
+            "auto_discovered": bool(cam_config.get("auto_discovered", False)),
+            "pending_credentials": pending,
         }
 
         with self._lock:
             self._stop_events[label] = per_stop
             self._camera_configs[label] = cam_config
             self._status[label] = initial_status
+
+        if pending:
+            # Track the camera but don't spawn a worker until credentials are set.
+            logger.info("[%s] camera awaiting credentials — worker not started", label)
+            return
+
+        with self._lock:
+            paused = self._recording_paused
+        if paused:
+            # Recording is globally paused — track the camera but don't spawn.
+            with self._lock:
+                if label in self._status:
+                    self._status[label]["state"] = "paused"
+            logger.info("[%s] recording paused — worker not started", label)
+            return
 
         if source == "file":
             worker = FileReplayWorker(cam_config, config, self.upload_queue, per_stop, self.global_stop_event, self)

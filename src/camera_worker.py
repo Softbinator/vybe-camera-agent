@@ -7,6 +7,8 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
+from src.config_loader import resolve_rtsp_url
+
 if TYPE_CHECKING:
     from src.agent_state import AgentState
 
@@ -40,8 +42,8 @@ class CameraWorker(threading.Thread):
         super().__init__(name=f"camera-{camera['label']}", daemon=True)
         self.label = camera["label"]
         self.source = camera.get("source", "rtsp")
-        # RTSP fields
-        self.rtsp_url = camera.get("rtsp_url", "")
+        # RTSP fields — resolve {USER}/{PASS} placeholders from separate fields when present
+        self.rtsp_url = resolve_rtsp_url(camera)
         # V4L2 fields
         self.device = camera.get("device", "/dev/video0")
         self.framerate = camera.get("framerate")        # e.g. 30
@@ -149,10 +151,15 @@ class CameraWorker(threading.Thread):
             "-strftime", "1",
             output_pattern,
         ]
+        # Force UTC for ffmpeg's -strftime so chunk filenames (YYYYMMDD_HHMMSS.mp4)
+        # are in UTC regardless of the host timezone. The uploader re-parses these
+        # as UTC, so the host's local TZ must not leak into the names.
+        env = {**os.environ, "TZ": "UTC"}
         return subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
+            env=env,
         )
 
     def _build_input_opts(self) -> list[str]:

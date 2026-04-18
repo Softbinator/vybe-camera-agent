@@ -1,0 +1,95 @@
+# On-site deployment compose.
+#
+# Runs the agent + a DHCP server + a one-shot NAT setup + a Tailscale sidecar
+# on a dedicated mini-PC with two NICs (WAN + camera LAN).
+#
+# Set WAN_IF / LAN_IF / LAN_CIDR / TS_AUTHKEY in .env before running.
+# install.sh prompts for these and renders them.
+
+services:
+  # --------------------------------------------------------------------------
+  # NAT setup — one-shot. Enables ip_forward and adds the MASQUERADE rule.
+  # --------------------------------------------------------------------------
+  nat-setup:
+    image: alpine:3.20
+    container_name: vybe-nat-setup
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    restart: "no"
+    command: ["/bin/sh", "/nat/nat-setup.sh"]
+    environment:
+      WAN_IF: ${WAN_IF}
+      LAN_CIDR: ${LAN_CIDR:-10.20.0.0/24}
+    volumes:
+      - ./nat:/nat:ro
+
+  # --------------------------------------------------------------------------
+  # dnsmasq — DHCP server on the camera-LAN interface.
+  # --------------------------------------------------------------------------
+  dnsmasq:
+    image: 4km3/dnsmasq:2.90-r3
+    container_name: vybe-dnsmasq
+    network_mode: host
+    cap_add: [NET_ADMIN]
+    restart: unless-stopped
+    command: ["--no-daemon", "--conf-file=/etc/dnsmasq.conf", "--interface=${LAN_IF}", "--log-queries"]
+    volumes:
+      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - dnsmasq-leases:/var/lib/misc
+    depends_on:
+      nat-setup:
+        condition: service_completed_successfully
+
+  # --------------------------------------------------------------------------
+  # Camera agent
+  # --------------------------------------------------------------------------
+  agent:
+    build: .
+    container_name: vybe-camera-agent
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      OUTPUT_DIR: /output
+    # network_mode: host so we (a) see USB devices and (b) can reach any camera
+    # on the LAN interface directly, with no Docker NAT in the middle.
+    network_mode: host
+    privileged: true
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - camera_tmp:/tmp/vybe-camera-agent
+      - ./output:/output
+      # Read-only access to dnsmasq leases for auto-discovery
+      - dnsmasq-leases:/var/lib/dnsmasq:ro
+      # /dev for hotplug USB cameras
+      - /dev:/dev
+    depends_on:
+      nat-setup:
+        condition: service_completed_successfully
+      dnsmasq:
+        condition: service_started
+
+  # --------------------------------------------------------------------------
+  # Tailscale sidecar — remote dev/ops access to the agent and SSH to the host.
+  # Enrolled automatically via TS_AUTHKEY (mint a reusable key in the Tailscale
+  # admin console, tag it as :camera-agent for easy ACLs).
+  # --------------------------------------------------------------------------
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: vybe-tailscale
+    hostname: ${TS_HOSTNAME:-vybe-camera-agent}
+    cap_add: [NET_ADMIN, SYS_MODULE]
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:---ssh --accept-dns=false}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    network_mode: host
+    restart: unless-stopped
+
+volumes:
+  camera_tmp:
+  dnsmasq-leases:
+  tailscale-state:

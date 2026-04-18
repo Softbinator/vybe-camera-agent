@@ -5,9 +5,10 @@
 # and re-publish it as a live RTSP stream that camera-agent can consume.
 #
 # Add one entry per camera you want to mock. The stream name (e.g. "camera1")
-# must match what you put in config.yaml as the camera's rtsp_url:
+# must match the URL you register the camera with in the backend. Since auth
+# is enabled below, include credentials in the URL:
 #
-#   rtsp://mediamtx:8554/camera1
+#   rtsp://vybe:vybe-cam-test@mediamtx:8554/camera1
 #
 # The corresponding file in mock_videos/ must be named camera1.mp4.
 
@@ -18,6 +19,26 @@ webrtcAddress: :8889
 
 # Log only warnings to keep compose output readable
 logLevel: warn
+
+# Authentication — simulates a real IP camera that requires credentials.
+# - Publishing (runOnInit ffmpeg) is allowed without creds from localhost only.
+# - Reading (the camera-agent pulling the stream) requires the vybe user/pass.
+# Use this URL in the backend when registering the camera:
+#   rtsp://vybe:vybe-cam-test@mediamtx:8554/camera1
+authMethod: internal
+authInternalUsers:
+  - user: any
+    ips: [127.0.0.1/32, ::1/128]
+    permissions:
+      - action: publish
+      - action: api
+      - action: metrics
+      - action: pprof
+  - user: vybe
+    pass: vybe-cam-test
+    permissions:
+      - action: read
+      - action: playback
 
 paths:
   # Stream name: camera1 → file: /mock_videos/camera1.mp4

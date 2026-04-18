@@ -14,9 +14,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_BACKOFF_BASE = 1       # seconds
-_BACKOFF_MAX = 300      # 5 minutes cap
+_BACKOFF_BASE = 2       # seconds — first retry delay
+_BACKOFF_MAX = 30       # 30 seconds cap (we don't want to block the queue long)
+_MAX_RETRIES = 5        # attempts per chunk before giving up and quarantining it
 _TOKEN_REFRESH_MARGIN = 30  # seconds before expiry to refresh token
+_QUARANTINE_SUBDIR = "failed"  # under output_dir; created on demand
 
 
 def _parse_start_time(filename: str) -> str:
@@ -167,6 +169,19 @@ class Uploader(threading.Thread):
         output_dir = cfg.get("output_dir", "/output")
         self._save_locally(local_path, label, output_dir)
 
+    def _quarantine(self, local_path: str, label: str, output_dir: str, reason: str) -> None:
+        """Move a chunk that exhausted its retries into output_dir/failed/<label>/.
+        We never discard user data silently — the operator can inspect or re-upload manually."""
+        dest_dir = os.path.join(output_dir, _QUARANTINE_SUBDIR, label)
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, os.path.basename(local_path))
+            shutil.move(local_path, dest)
+            logger.error("[%s] upload gave up (%s) — quarantined to %s", label, reason, dest)
+        except OSError as exc:
+            logger.error("[%s] upload gave up (%s) — could not quarantine %s: %s",
+                         label, reason, local_path, exc)
+
     def _upload_with_retry(self, item: dict, cfg: dict, also_save_locally: bool = False) -> None:
         label = item["label"]
         local_path = item["path"]
@@ -176,10 +191,17 @@ class Uploader(threading.Thread):
             logger.debug("[%s] chunk not found, skipping: %s", label, os.path.basename(local_path))
             return
 
+        # Non-blocking backoff: before each retry, wait in small slices so we stay
+        # responsive to stop_event (pause / shutdown) and to queue purges. Cap the
+        # total wait at _BACKOFF_MAX seconds so the queue can't stall for minutes.
         if attempt > 0:
             delay = min(_BACKOFF_BASE * (2 ** (attempt - 1)), _BACKOFF_MAX)
-            logger.info("[%s] retry %d — waiting %ds before upload", label, attempt, delay)
-            time.sleep(delay)
+            logger.info("[%s] retry %d/%d — waiting %ds before upload", label, attempt, _MAX_RETRIES, delay)
+            deadline = time.monotonic() + delay
+            while time.monotonic() < deadline and not self.stop_event.is_set():
+                time.sleep(0.5)
+            if self.stop_event.is_set():
+                return
 
         # Re-read live config values so switching API URL / credentials takes effect
         api_base_url = cfg.get("api_base_url", "").rstrip("/")
@@ -219,15 +241,26 @@ class Uploader(threading.Thread):
                         os.remove(local_path)
                     except OSError as exc:
                         logger.warning("[%s] could not delete temp chunk %s: %s", label, local_path, exc)
-            else:
-                logger.warning(
-                    "[%s] upload failed (attempt %d): HTTP %d — %s",
-                    label, attempt + 1, resp.status_code, resp.text[:2000],
-                )
-                item["attempt"] = attempt + 1
-                self.upload_queue.put(item)
+                return
+
+            logger.warning(
+                "[%s] upload failed (attempt %d/%d): HTTP %d — %s",
+                label, attempt + 1, _MAX_RETRIES, resp.status_code, resp.text[:2000],
+            )
+            self._schedule_retry(item, attempt, cfg, f"HTTP {resp.status_code}")
 
         except requests.RequestException as exc:
-            logger.warning("[%s] upload error (attempt %d): %s", label, attempt + 1, exc)
-            item["attempt"] = attempt + 1
-            self.upload_queue.put(item)
+            logger.warning("[%s] upload error (attempt %d/%d): %s",
+                           label, attempt + 1, _MAX_RETRIES, exc)
+            self._schedule_retry(item, attempt, cfg, str(exc))
+
+    def _schedule_retry(self, item: dict, attempt: int, cfg: dict, reason: str) -> None:
+        """Requeue the chunk for another attempt, or quarantine it if over the cap."""
+        label = item["label"]
+        local_path = item["path"]
+        if attempt + 1 >= _MAX_RETRIES:
+            output_dir = cfg.get("output_dir", "/output")
+            self._quarantine(local_path, label, output_dir, reason)
+            return
+        item["attempt"] = attempt + 1
+        self.upload_queue.put(item)

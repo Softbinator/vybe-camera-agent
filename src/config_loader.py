@@ -75,6 +75,8 @@ def _validate(config: dict) -> None:
     config.setdefault("cameras", [])
     config.setdefault("storage_mode", "upload")
     config.setdefault("output_dir", "/output")
+    config.setdefault("lan_discovery", {})
+    config.setdefault("recording_paused", False)
 
     cameras = config["cameras"]
     if not isinstance(cameras, list):
@@ -83,6 +85,20 @@ def _validate(config: dict) -> None:
     storage_mode = config["storage_mode"]
     if storage_mode not in ("upload", "local", "both"):
         raise ValueError(f"'storage_mode' must be 'upload', 'local', or 'both', got '{storage_mode}'")
+
+    lan = config["lan_discovery"]
+    if not isinstance(lan, dict):
+        raise ValueError("'lan_discovery' must be a mapping")
+    lan.setdefault("enabled", False)
+    lan.setdefault("leases_file", "/var/lib/dnsmasq/dnsmasq.leases")
+    lan.setdefault("rtsp_port", 554)
+    lan.setdefault("probe_paths", [
+        "/stream1",
+        "/Streaming/Channels/101",
+        "/h264Preview_01_main",
+        "/live",
+        "/",
+    ])
 
     seen_labels = set()
     for i, cam in enumerate(cameras):
@@ -100,6 +116,9 @@ def _validate(config: dict) -> None:
         if source not in ("rtsp", "file", "v4l2"):
             raise ValueError(f"Camera '{label}': source must be 'rtsp', 'v4l2', or 'file', got '{source}'")
 
+        cam.setdefault("auto_discovered", False)
+        cam.setdefault("pending_credentials", False)
+
         if source == "rtsp":
             if "rtsp_url" not in cam or cam["rtsp_url"] == "":
                 raise ValueError(f"Camera '{label}' (source=rtsp) is missing required field 'rtsp_url'")
@@ -109,3 +128,16 @@ def _validate(config: dict) -> None:
         elif source == "file":
             if "replay_dir" not in cam or cam["replay_dir"] == "":
                 raise ValueError(f"Camera '{label}' (source=file) is missing required field 'replay_dir'")
+
+
+def resolve_rtsp_url(cam: dict) -> str:
+    """Return the final RTSP URL for a camera, substituting {USER}/{PASS} placeholders
+    from cam['rtsp_username']/cam['rtsp_password'] when present."""
+    url = cam.get("rtsp_url", "")
+    user = cam.get("rtsp_username")
+    password = cam.get("rtsp_password")
+    if user is not None:
+        url = url.replace("{USER}", str(user))
+    if password is not None:
+        url = url.replace("{PASS}", str(password))
+    return url
