@@ -1,0 +1,40 @@
+# MediaMTX config for the dummy-camera test harness.
+# Place next to the mediamtx binary on the laptop, then launch with:
+#   ./mediamtx        (Linux / macOS)
+#   mediamtx.exe      (Windows — double-click or from PowerShell)
+
+logLevel: info
+
+# RTSP listens on 8554 by default. Change the agent's lan_discovery.rtsp_port
+# to 8554, or put 8554 in the rtsp_url you paste into config.yaml.
+rtspAddress: :8554
+# Disable the protocols we don't need to avoid firewall prompts and port clashes.
+rtmpDisable: yes
+hlsDisable: yes
+webrtcDisable: yes
+srtDisable: yes
+
+# Authentication.
+# - Publishers (the ffmpeg process pushing the webcam) are allowed only from
+#   localhost, no password required.
+# - Readers (the camera-agent pulling the stream over ethernet) must present
+#   vybe / vybe-cam-test. Change these for anything real.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    ips: [127.0.0.1/32, ::1/128]
+    permissions:
+      - action: publish
+      - action: api
+      - action: metrics
+      - action: pprof
+  - user: vybe
+    pass: vybe-cam-test
+    permissions:
+      - action: read
+      - action: playback
+
+paths:
+  # The push-webcam-* scripts publish into this path.
+  webcam:
+    source: publisher

@@ -57,6 +57,11 @@ class CameraWorker(threading.Thread):
         self.per_stop_event = per_stop_event
         self.global_stop_event = global_stop_event
         self.state = state
+        # Stop-gap for a silent-hang bug where chunks stop flowing with no error:
+        # force a full worker restart every N chunks. 0 disables.
+        self.restart_every_n_chunks = int(config.get("restart_every_n_chunks", 0) or 0)
+        self._chunks_since_start = 0
+        self._restart_triggered = False
 
     def _should_stop(self) -> bool:
         return self.per_stop_event.is_set() or self.global_stop_event.is_set()
@@ -235,3 +240,22 @@ class CameraWorker(threading.Thread):
             logger.info("[%s] chunk ready: %s", self.label, os.path.basename(abs_path))
             self.upload_queue.put({"label": self.label, "path": abs_path})
             self.state.record_chunk_enqueued(self.label)
+            self._chunks_since_start += 1
+            if (
+                self.restart_every_n_chunks > 0
+                and not self._restart_triggered
+                and self._chunks_since_start >= self.restart_every_n_chunks
+            ):
+                self._restart_triggered = True
+                logger.info(
+                    "[%s] restart threshold (%d chunks) reached — triggering worker restart",
+                    self.label, self.restart_every_n_chunks,
+                )
+                # Dispatch from a one-shot thread: restart_camera() joins this
+                # worker, so we cannot call it from within our own thread.
+                threading.Thread(
+                    target=self.state.restart_camera,
+                    args=(self.label,),
+                    name=f"restart-{self.label}",
+                    daemon=True,
+                ).start()

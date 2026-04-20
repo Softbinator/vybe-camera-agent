@@ -138,14 +138,26 @@ prompt_wifi_networks() {
 
   echo
   echo "==> Add known wifi networks (the host will auto-connect to whichever is in range)."
-  echo "    Press Enter with empty SSID when done."
+  echo "    Press Enter with empty SSID when done. Repeating an SSID updates its password."
   while :; do
     local ssid password
     read -r -p "  SSID (blank to finish): " ssid
     [[ -z "${ssid}" ]] && break
     read -r -s -p "  Password for '${ssid}' (blank for open network): " password; echo
-    WIFI_SSIDS+=("${ssid}")
-    WIFI_PASSWORDS+=("${password}")
+    # Replace any previous entry with the same SSID so netplan doesn't fail on duplicates.
+    local i found=""
+    for i in "${!WIFI_SSIDS[@]}"; do
+      if [[ "${WIFI_SSIDS[$i]}" == "${ssid}" ]]; then
+        WIFI_PASSWORDS[$i]="${password}"
+        found=1
+        echo "    (updated password for existing SSID '${ssid}')"
+        break
+      fi
+    done
+    if [[ -z "${found}" ]]; then
+      WIFI_SSIDS+=("${ssid}")
+      WIFI_PASSWORDS+=("${password}")
+    fi
   done
 
   if [[ ${#WIFI_SSIDS[@]} -eq 0 ]]; then

@@ -22,8 +22,10 @@ if ! command -v iptables >/dev/null 2>&1; then
   apk add --no-cache iptables >/dev/null
 fi
 
-# Enable IPv4 forwarding in the host kernel (shared via host network namespace)
-echo 1 > /proc/sys/net/ipv4/ip_forward
+# Enable IPv4 forwarding in the host kernel (shared via host network namespace).
+# Use sysctl rather than writing to /proc directly — /proc/sys is read-only
+# inside containers even with NET_ADMIN.
+sysctl -w net.ipv4.ip_forward=1
 
 # MASQUERADE outbound traffic from the camera LAN through the WAN interface
 if ! iptables -t nat -C POSTROUTING -s "${LAN_CIDR}" -o "${WAN_IF}" -j MASQUERADE 2>/dev/null; then

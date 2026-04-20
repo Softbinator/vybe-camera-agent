@@ -28,7 +28,6 @@ logLevel: warn
 authMethod: internal
 authInternalUsers:
   - user: any
-    ips: [127.0.0.1/32, ::1/128]
     permissions:
       - action: publish
       - action: api
@@ -64,6 +63,10 @@ paths:
       -f rtsp
       rtsp://localhost:8554/$MTX_PATH
     runOnInitRestart: yes
+
+  # Live webcam pushed from the host via push-webcam-linux.sh
+  webcam:
+    source: publisher
 
   # Add more entries following the same pattern as your camera labels.
   # stream name: entrance → file: /mock_videos/entrance.mp4

@@ -14,14 +14,14 @@ services:
     image: alpine:3.20
     container_name: vybe-nat-setup
     network_mode: host
-    cap_add: [NET_ADMIN]
+    privileged: true
     restart: "no"
     command: ["/bin/sh", "/nat/nat-setup.sh"]
     environment:
       WAN_IF: ${WAN_IF}
       LAN_CIDR: ${LAN_CIDR:-10.20.0.0/24}
     volumes:
-      - ./nat:/nat:ro
+      - ./nat:/nat
 
   # --------------------------------------------------------------------------
   # dnsmasq — DHCP server on the camera-LAN interface.
@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     command: ["--no-daemon", "--conf-file=/etc/dnsmasq.conf", "--interface=${LAN_IF}", "--log-queries"]
     volumes:
-      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf:ro
+      - ./dnsmasq/dnsmasq.conf:/etc/dnsmasq.conf
       - dnsmasq-leases:/var/lib/misc
     depends_on:
       nat-setup:
@@ -59,7 +59,7 @@ services:
       - camera_tmp:/tmp/vybe-camera-agent
       - ./output:/output
       # Read-only access to dnsmasq leases for auto-discovery
-      - dnsmasq-leases:/var/lib/dnsmasq:ro
+      - dnsmasq-leases:/var/lib/dnsmasq
       # /dev for hotplug USB cameras
       - /dev:/dev
     depends_on:
